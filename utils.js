@@ -281,6 +281,10 @@ async function parseExcelOrCSV(file) {
  */
 async function parsePDF(file, progressCallback = () => {}) {
     try {
+        if (typeof pdfjsLib === 'undefined') {
+            throw new Error("PDF parser library (PDF.js) failed to load from CDN. Please refresh the page.");
+        }
+        
         progressCallback(`Reading PDF: ${file.name}...`);
         const arrayBuffer = await file.arrayBuffer();
         const uint8Array = new Uint8Array(arrayBuffer);
@@ -288,7 +292,11 @@ async function parsePDF(file, progressCallback = () => {}) {
             throw new Error("The uploaded file is empty (0 bytes).");
         }
         
-        const pdf = await pdfjsLib.getDocument({ data: uint8Array }).promise;
+        const pdf = await pdfjsLib.getDocument({
+            data: uint8Array,
+            cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+            cMapPacked: true
+        }).promise;
         const totalPages = pdf.numPages;
         
         let fullTextLines = [];
@@ -316,21 +324,21 @@ async function parsePDF(file, progressCallback = () => {}) {
             sortedY.forEach(y => {
                 const rowItems = rowsMap.get(y).sort((a, b) => (a.transform ? a.transform[4] : 0) - (b.transform ? b.transform[4] : 0));
                 const lineStr = rowItems.map(it => it.str.trim()).join(' | ');
-                if (lineStr.length > 3) {
+                if (lineStr.length > 2) {
                     fullTextLines.push(lineStr);
                 }
             });
         }
         
         // Phase 2: OCR Fallback if scanned image-based PDF (low character density)
-        if (totalExtractedChars < 50 * totalPages) {
+        if (totalExtractedChars < 30 * totalPages) {
             progressCallback(`Scanned PDF detected! Initializing OCR engine for ${file.name}...`);
             fullTextLines = []; // Clear noisy text
             
             for (let i = 1; i <= totalPages; i++) {
                 progressCallback(`Running AI OCR on Page ${i}/${totalPages} (Please wait)...`);
                 const page = await pdf.getPage(i);
-                const viewport = page.getViewport({ scale: 2.0 }); // High resolution for OCR accuracy
+                const viewport = page.getViewport({ scale: 2.0 });
                 
                 const canvas = document.createElement('canvas');
                 const context = canvas.getContext('2d');
@@ -339,27 +347,65 @@ async function parsePDF(file, progressCallback = () => {}) {
                 
                 await page.render({ canvasContext: context, viewport: viewport }).promise;
                 
-                // Run Tesseract OCR on canvas image
-                if (typeof Tesseract === 'undefined') {
-                    throw new Error("OCR Engine (Tesseract.js) not loaded.");
+                if (typeof Tesseract !== 'undefined') {
+                    const result = await Tesseract.recognize(canvas, 'eng');
+                    const ocrText = result.data.text || '';
+                    ocrText.split(/\r?\n/).forEach(line => {
+                        const cleaned = line.trim();
+                        if (cleaned.length > 2) fullTextLines.push(cleaned);
+                    });
                 }
-                const result = await Tesseract.recognize(canvas, 'eng');
-                const ocrText = result.data.text || '';
-                
-                ocrText.split(/\r?\n/).forEach(line => {
-                    const cleaned = line.trim();
-                    if (cleaned.length > 3) fullTextLines.push(cleaned);
-                });
             }
         }
         
         // Phase 3: Parse extracted text lines into structured person records
         progressCallback(`Structuring records from ${file.name}...`);
-        const records = parseTextLinesToRecords(fullTextLines, file.name);
+        let records = parseTextLinesToRecords(fullTextLines, file.name);
+        
+        // Universal Fallback: If heuristic parsing caught 0 records but lines exist, convert raw lines directly
+        if (records.length === 0 && fullTextLines.length > 0) {
+            fullTextLines.slice(0, 500).forEach((line, idx) => {
+                const words = line.split(/[\|\t]|\s{2,}/).map(w => w.trim()).filter(w => w.length > 1 && !/^\d+$/.test(w));
+                if (words.length >= 2) {
+                    records.push({
+                        id: `${file.name}_fallback_${idx + 1}`,
+                        sourceFile: file.name,
+                        fileType: 'PDF',
+                        rawName: words[0],
+                        rawFatherName: words[1],
+                        normName: normalizeText(words[0]),
+                        normFatherName: normalizeText(words[1]),
+                        address: words[2] || '',
+                        mobile: normalizeMobile(line),
+                        dob: '',
+                        originalRowData: { Name: words[0], 'Father Name': words[1] }
+                    });
+                } else if (words.length === 1 && line.length > 5) {
+                    records.push({
+                        id: `${file.name}_fallback_${idx + 1}`,
+                        sourceFile: file.name,
+                        fileType: 'PDF',
+                        rawName: words[0],
+                        rawFatherName: 'N/A',
+                        normName: normalizeText(words[0]),
+                        normFatherName: 'NA',
+                        address: '',
+                        mobile: normalizeMobile(line),
+                        dob: '',
+                        originalRowData: { Name: words[0], 'Father Name': 'N/A' }
+                    });
+                }
+            });
+        }
+        
+        if (records.length === 0) {
+            throw new Error(`Could not find valid text data inside "${file.name}". Ensure the file is not corrupted or password protected.`);
+        }
+        
         return records;
     } catch (err) {
         console.error("PDF Parse Error:", err);
-        throw new Error(`Failed to parse PDF "${file.name}": ${err.message}`);
+        throw new Error(err.message || `Failed to parse PDF "${file.name}"`);
     }
 }
 
@@ -391,20 +437,17 @@ function parseTextLinesToRecords(lines, fileName) {
             if (mobileMatch) mobile = mobileMatch[1];
         } else if (nameMatch) {
             name = nameMatch[1].trim();
-            // Check next line for father name
             if (i + 1 < lines.length) {
                 const nextLine = lines[i + 1];
                 const nextFather = nextLine.match(/(?:Father|Guardian|S\/O|D\/O)\s*[\:\-\=]?\s*([A-Za-z\s]+)/i);
                 if (nextFather) {
                     fatherName = nextFather[1].trim();
-                    i++; // skip next line
+                    i++;
                 }
             }
-        } else if (line.includes(' | ') || line.includes(' - ') || line.includes('/') || line.includes(',') || line.includes('\t')) {
-            // Table row separator assumption: "101 | Rohan Kumar | Suresh Kumar | Delhi" or "Rohan Kumar, Suresh Kumar"
-            const parts = line.split(/[\|\t\/\,\-]/).map(s => s.trim()).filter(Boolean);
-            // Filter out serial numbers or numeric IDs
-            const textParts = parts.filter(p => !/^\d+$/.test(p) && p.length > 1);
+        } else if (line.includes(' | ') || line.includes(' - ') || line.includes('/') || line.includes(',') || line.includes('\t') || /\s{2,}/.test(line)) {
+            const parts = line.split(/[\|\t\/\,\-]|\s{2,}/).map(s => s.trim()).filter(Boolean);
+            const textParts = parts.filter(p => !/^\d+$/.test(p) && p.length > 1 && !/^(male|female|gen|obc|sc|st|m|f|yes|no)$/i.test(p));
             if (textParts.length >= 2) {
                 name = textParts[0];
                 fatherName = textParts[1];
