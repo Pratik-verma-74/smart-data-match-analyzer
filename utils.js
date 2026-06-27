@@ -228,15 +228,21 @@ async function parseExcelOrCSV(file) {
                 const records = rawRows.map((row, index) => {
                     const rawName = String(row[colMap.name] || '').trim();
                     const rawFather = String(row[colMap.fatherName] || '').trim();
+                    const formNum = String(row[colMap.formNumber] || '').trim();
                     
-                    // Skip completely empty rows
-                    if (!rawName && !rawFather) return null;
+                    if (!rawName && !rawFather && !formNum) return null;
+                    
+                    // Filter out noise / document instructions / headers
+                    const isNoise = /(?:provisional|admission|academic|session|candidate.*must|bring.*all|necessary|document|certificate|copy.*of|class.*10th|12th|cuet|igntu|registration.*form|score.*card|merit.*list|department|university|instructions|signature|controller|examination|notice|date|page\s*\d|s\.?no|form.*no|name.*of.*applicant|programme.*name)/i.test(rawName + ' ' + rawFather) ||
+                                    rawName.length > 35 || rawFather.length > 35 ||
+                                    /\d/.test(rawName);
+                    if (isNoise && !formNum) return null;
                     
                     return {
                         id: `${file.name}_row_${index + 1}`,
                         sourceFile: file.name,
                         fileType: file.name.split('.').pop().toUpperCase(),
-                        formNumber: String(row[colMap.formNumber] || '').trim(),
+                        formNumber: formNum,
                         programme: String(row[colMap.programme] || '').trim(),
                         scoreValue: String(row[colMap.score] || '').trim(),
                         rawName: rawName || 'N/A',
@@ -353,12 +359,16 @@ async function parsePDF(file, progressCallback = () => {}) {
         // Universal Fallback: If heuristic parsing caught 0 records but lines exist, convert raw lines directly
         if (records.length === 0 && fullTextLines.length > 0) {
             fullTextLines.slice(0, 500).forEach((line, idx) => {
+                if (/(?:provisional|admission|academic|session|candidate.*must|bring.*all|necessary|document|certificate|copy.*of|class.*10th|12th|cuet|igntu|registration.*form|score.*card|merit.*list|department|university|instructions|signature|controller|examination|notice|date|page\s*\d|s\.?no|form.*no|name.*of.*applicant|programme.*name)/i.test(line)) return;
                 const words = line.split(/[\|\t]|\s{2,}/).map(w => w.trim()).filter(w => w.length > 1 && !/^\d+$/.test(w));
-                if (words.length >= 2) {
+                if (words.length >= 2 && words[0].length <= 35 && words[1].length <= 35 && !/\d/.test(words[0])) {
                     records.push({
                         id: `${file.name}_fallback_${idx + 1}`,
                         sourceFile: file.name,
                         fileType: 'PDF',
+                        formNumber: '',
+                        programme: '',
+                        scoreValue: '',
                         rawName: words[0],
                         rawFatherName: words[1],
                         normName: normalizeText(words[0]),
@@ -367,20 +377,6 @@ async function parsePDF(file, progressCallback = () => {}) {
                         mobile: normalizeMobile(line),
                         dob: '',
                         originalRowData: { Name: words[0], 'Father Name': words[1] }
-                    });
-                } else if (words.length === 1 && line.length > 5) {
-                    records.push({
-                        id: `${file.name}_fallback_${idx + 1}`,
-                        sourceFile: file.name,
-                        fileType: 'PDF',
-                        rawName: words[0],
-                        rawFatherName: 'N/A',
-                        normName: normalizeText(words[0]),
-                        normFatherName: 'NA',
-                        address: '',
-                        mobile: normalizeMobile(line),
-                        dob: '',
-                        originalRowData: { Name: words[0], 'Father Name': 'N/A' }
                     });
                 }
             });
@@ -468,6 +464,12 @@ function parseTextLinesToRecords(lines, fileName) {
         }
         
         if (name && fatherName && name.length > 1 && fatherName.length > 1) {
+            // Strict Noise Filter: Reject instruction sentences / document headers
+            const isNoise = /(?:provisional|admission|academic|session|candidate.*must|bring.*all|necessary|document|certificate|copy.*of|class.*10th|12th|cuet|igntu|registration.*form|score.*card|merit.*list|department|university|instructions|signature|controller|examination|notice|date|page\s*\d|s\.?no|form.*no|name.*of.*applicant|programme.*name)/i.test(name + ' ' + fatherName) ||
+                            name.length > 35 || fatherName.length > 35 ||
+                            /\d/.test(name);
+            if (isNoise && !formNumber) continue;
+
             records.push({
                 id: `${fileName}_pdf_${recordIndex++}`,
                 sourceFile: fileName,

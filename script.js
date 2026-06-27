@@ -393,13 +393,22 @@ function executeMatchingEngine(allRecords) {
 
     const processedIds = new Set();
 
+    // Safety Net: Filter out any stray instruction / header sentences from records before matching
+    const cleanRecords = allRecords.filter(r => {
+        const text = (r.rawName || '') + ' ' + (r.rawFatherName || '');
+        const isNoise = /(?:provisional|admission|academic|session|candidate.*must|bring.*all|necessary|document|certificate|copy.*of|class.*10th|12th|cuet|igntu|registration.*form|score.*card|merit.*list|department|university|instructions|signature|controller|examination|notice|date|page\s*\d|s\.?no|form.*no|name.*of.*applicant|programme.*name)/i.test(text) ||
+                        (r.rawName && r.rawName.length > 35) || (r.rawFatherName && r.rawFatherName.length > 35) ||
+                        /\d/.test(r.rawName || '');
+        return !isNoise || (r.formNumber && r.formNumber !== 'N/A');
+    });
+
     // Step A: Detect within-file DUPLICATES first
-    for (let i = 0; i < allRecords.length; i++) {
-        const recA = allRecords[i];
+    for (let i = 0; i < cleanRecords.length; i++) {
+        const recA = cleanRecords[i];
         if (processedIds.has(recA.id)) continue;
 
-        for (let j = i + 1; j < allRecords.length; j++) {
-            const recB = allRecords[j];
+        for (let j = i + 1; j < cleanRecords.length; j++) {
+            const recB = cleanRecords[j];
             if (processedIds.has(recB.id)) continue;
 
             if (recA.sourceFile === recB.sourceFile) {
@@ -420,7 +429,7 @@ function executeMatchingEngine(allRecords) {
     }
 
     // Step B: Compare remaining records across files
-    const remainingRecords = allRecords.filter(r => !processedIds.has(r.id));
+    const remainingRecords = cleanRecords.filter(r => !processedIds.has(r.id));
     const matchedInStepB = new Set();
 
     for (let i = 0; i < remainingRecords.length; i++) {
@@ -476,8 +485,8 @@ function executeMatchingEngine(allRecords) {
                 scoreValue: recA.scoreValue || bestMatch.scoreValue || '',
                 name: recA.rawName.length >= bestMatch.rawName.length ? recA.rawName : bestMatch.rawName,
                 fatherName: recA.rawFatherName.length >= bestMatch.rawFatherName.length ? recA.rawFatherName : bestMatch.rawFatherName,
-                rawName: `${recA.rawName} ≈ ${bestMatch.rawName}`,
-                rawFatherName: `${recA.rawFatherName} ≈ ${bestMatch.rawFatherName}`,
+                rawName: recA.rawName.trim().toLowerCase() === bestMatch.rawName.trim().toLowerCase() ? recA.rawName : `${recA.rawName} ≈ ${bestMatch.rawName}`,
+                rawFatherName: recA.rawFatherName.trim().toLowerCase() === bestMatch.rawFatherName.trim().toLowerCase() ? recA.rawFatherName : `${recA.rawFatherName} ≈ ${bestMatch.rawFatherName}`,
                 normName: recA.normName,
                 normFatherName: recA.normFatherName,
                 score: bestScore,
