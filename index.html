@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Data Match Analyzer - AI Person Record Comparison</title>
+    <meta name="description" content="Production-ready AI-powered web application for comparing multiple PDF and Excel files to detect exact, partial, duplicate, and unique person records.">
+    
+    <!-- External CSS -->
+    <link rel="stylesheet" href="style.css?v=2.0">
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Libraries CDN -->
+    <!-- SheetJS for Excel & CSV -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <!-- PDF.js for PDF Parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- Tesseract.js for AI OCR on Scanned Image PDFs -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <!-- Fuse.js for Fuzzy Matching -->
+    <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+    <!-- jsPDF & autoTable for Report Generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+    <div class="container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-section">
+                <div class="logo-icon"><i class="fas fa-layer-group"></i></div>
+                <div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <h1 class="app-title">Smart Data Match Analyzer</h1>
+                        <span style="background: linear-gradient(135deg, #2563eb, #3b82f6); color: white; padding: 2px 10px; border-radius: 20px; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; box-shadow: 0 2px 8px rgba(37,99,235,0.3);">AI EDITION</span>
+                    </div>
+                    <p class="app-subtitle">AI-Powered Multi-File Person Record Normalization & Deduplication</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button id="loadSampleBtn" class="btn btn-secondary" title="Load Sample Test Data instantly">
+                    <i class="fas fa-magic"></i> Load Test Data
+                </button>
+                <button id="themeToggleBtn" class="btn btn-icon-only" title="Toggle Dark/Light Theme">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Upload & Controls Section -->
+        <div class="upload-grid">
+            <!-- Left: Drag & Drop Zone -->
+            <div class="glass-card">
+                <div class="card-title">
+                    <span><i class="fas fa-cloud-upload-alt text-primary"></i> Upload Data Files</span>
+                    <span class="badge-count">Multi-File Support</span>
+                </div>
+                
+                <div id="dropZone" class="drop-zone">
+                    <input type="file" id="fileInput" multiple accept=".pdf,.xlsx,.xls,.csv" hidden>
+                    <div class="drop-icon"><i class="fas fa-file-import"></i></div>
+                    <div class="drop-title">Drag & Drop files here or click to browse</div>
+                    <div class="drop-subtitle">Upload unlimited sheets and PDFs simultaneously</div>
+                    <div class="format-tags">
+                        <span class="format-tag"><i class="fas fa-file-pdf"></i> .PDF (with OCR)</span>
+                        <span class="format-tag"><i class="fas fa-file-excel"></i> .XLSX</span>
+                        <span class="format-tag"><i class="fas fa-file-excel"></i> .XLS</span>
+                        <span class="format-tag"><i class="fas fa-file-csv"></i> .CSV</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Uploaded Files Queue -->
+            <div class="glass-card flex flex-col justify-between">
+                <div>
+                    <div class="card-title">
+                        <span><i class="fas fa-list-check"></i> Uploaded Queue</span>
+                        <span id="uploadedFileCountBadge" class="badge-count">0</span>
+                    </div>
+                    
+                    <div id="fileListContainer" class="file-list-container">
+                        <div class="empty-file-list">
+                            <i class="fas fa-folder-open"></i>
+                            <p>No files uploaded yet. Drag & drop above or click 'Load Test Data'.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="upload-actions-bar">
+                    <button id="clearAllBtn" class="btn btn-secondary">
+                        <i class="fas fa-trash-alt"></i> Clear Queue
+                    </button>
+                    <button id="runAnalyzerBtn" class="btn btn-primary" disabled>
+                        <i class="fas fa-play"></i> Run AI Matcher
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- KPI Dashboard Section -->
+        <div class="kpi-grid">
+            <div class="kpi-card">
+                <div class="kpi-icon blue"><i class="fas fa-files"></i></div>
+                <div>
+                    <div class="kpi-label">Uploaded Files</div>
+                    <div id="kpiTotalFiles" class="kpi-value">0</div>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-icon indigo"><i class="fas fa-database"></i></div>
+                <div>
+                    <div class="kpi-label">Total Extracted Records</div>
+                    <div id="kpiTotalRecords" class="kpi-value">0</div>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-icon green"><i class="fas fa-check-double"></i></div>
+                <div>
+                    <div class="kpi-label">Exact Matches (95-100%)</div>
+                    <div id="kpiExactMatches" class="kpi-value">0</div>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-icon orange"><i class="fas fa-adjust"></i></div>
+                <div>
+                    <div class="kpi-label">Partial Matches (80-94%)</div>
+                    <div id="kpiPartialMatches" class="kpi-value">0</div>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-icon red"><i class="fas fa-clone"></i></div>
+                <div>
+                    <div class="kpi-label">Within-File Duplicates</div>
+                    <div id="kpiDuplicates" class="kpi-value">0</div>
+                </div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-icon slate"><i class="fas fa-user-tag"></i></div>
+                <div>
+                    <div class="kpi-label">Unique Records (&lt;80%)</div>
+                    <div id="kpiUnique" class="kpi-value">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Table Section -->
+        <div class="results-header">
+            <!-- Navigation Tabs -->
+            <div class="tabs-container">
+                <button class="tab-btn active" data-tab="exact">
+                    <i class="fas fa-check-circle text-green-500"></i> Exact Matches 
+                    <span id="badgeExact" class="badge-count">0</span>
+                </button>
+                <button class="tab-btn" data-tab="partial">
+                    <i class="fas fa-exclamation-circle text-amber-500"></i> Partial Matches 
+                    <span id="badgePartial" class="badge-count">0</span>
+                </button>
+                <button class="tab-btn" data-tab="duplicates">
+                    <i class="fas fa-copy text-red-500"></i> Duplicates 
+                    <span id="badgeDuplicates" class="badge-count">0</span>
+                </button>
+                <button class="tab-btn" data-tab="unique">
+                    <i class="fas fa-fingerprint text-slate-500"></i> Unique Records 
+                    <span id="badgeUnique" class="badge-count">0</span>
+                </button>
+            </div>
+
+            <!-- Toolbar Controls -->
+            <div class="toolbar-controls">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchInput" placeholder="Search name, father, file...">
+                </div>
+
+                <select id="sourceFilterSelect" class="select-control" title="Filter by Source File">
+                    <option value="all">All Source Files</option>
+                </select>
+
+                <select id="sortSelect" class="select-control" title="Sort Results">
+                    <option value="score_desc">Sort by Score: High to Low</option>
+                    <option value="score_asc">Sort by Score: Low to High</option>
+                    <option value="name_asc">Sort by Name: A to Z</option>
+                    <option value="name_desc">Sort by Name: Z to A</option>
+                </select>
+
+                <button id="exportExcelBtn" class="btn btn-secondary" title="Export Results to Excel">
+                    <i class="fas fa-file-excel text-green-600"></i> Export Excel
+                </button>
+                <button id="exportPdfBtn" class="btn btn-secondary" title="Export Report to PDF">
+                    <i class="fas fa-file-pdf text-red-600"></i> Export PDF Report
+                </button>
+            </div>
+        </div>
+
+        <!-- Table Container -->
+        <div class="table-container">
+            <table>
+                <thead id="resultsTableHeader">
+                    <tr>
+                        <th>Person Name</th>
+                        <th>Father / Guardian Name</th>
+                        <th class="text-center">Match Score</th>
+                        <th>Source Files</th>
+                        <th class="text-center">Status</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsTableBody">
+                    <tr>
+                        <td colspan="5" class="text-center">
+                            <div style="padding: 40px; color: var(--text-muted);">
+                                <i class="fas fa-analytics" style="font-size: 32px; margin-bottom: 12px; opacity: 0.5;"></i>
+                                <p>Upload files and run the analyzer to compare person records.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Smart Data Match Analyzer &copy; 2026 • Created by Pratik Verma</p>
+        </footer>
+    </div>
+
+    <!-- Processing Modal / Progress Overlay -->
+    <div id="progressModal" class="modal-overlay hidden">
+        <div class="progress-card">
+            <div class="spinner-icon"><i class="fas fa-circle-notch"></i></div>
+            <h3 class="progress-title">Analyzing Data Records</h3>
+            <p id="progressStatusText" class="progress-subtitle">Initializing parser...</p>
+            <div class="progress-bar-container">
+                <div id="progressBarFill" class="progress-bar-fill"></div>
+            </div>
+            <div id="progressPercentage" class="progress-percentage">0%</div>
+        </div>
+    </div>
+
+    <!-- PDF.js Worker Configuration -->
+    <script>
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+    </script>
+
+    <!-- Custom Application Scripts -->
+    <script src="utils.js?v=2.1"></script>
+    <script src="script.js?v=2.1"></script>
+</body>
+</html>
