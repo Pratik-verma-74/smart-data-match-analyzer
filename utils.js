@@ -438,6 +438,46 @@ function parseTextLinesToRecords(lines, fileName) {
 // ============================================================================
 
 /**
+ * Converts parsed PDF records into a structured Excel (.xlsx) file,
+ * triggers an automatic download for the user, and returns the File object
+ * so the matching engine processes it as a standard Excel file.
+ * @param {Array<Object>} pdfRecords - Records parsed from PDF
+ * @param {string} pdfFileName - Original PDF filename
+ * @returns {Promise<File>} - Converted Excel File object
+ */
+async function convertPDFToExcelFile(pdfRecords, pdfFileName) {
+    const sheetData = pdfRecords.map((r, idx) => ({
+        'S.No': idx + 1,
+        'Candidate Name': r.rawName || 'N/A',
+        'Father / Guardian Name': r.rawFatherName || 'N/A',
+        'Mobile': r.mobile || '',
+        'Source Document': pdfFileName
+    }));
+    
+    const worksheet = XLSX.utils.json_to_sheet(sheetData);
+    
+    // Auto-adjust column widths
+    worksheet['!cols'] = [
+        { wch: 8 },
+        { wch: 30 },
+        { wch: 30 },
+        { wch: 15 },
+        { wch: 25 }
+    ];
+    
+    const workbook = XLSX.utils.book_new();
+    const excelName = pdfFileName.replace(/\.pdf$/i, '') + '_Converted.xlsx';
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Converted PDF Data');
+    
+    // Trigger physical download of the converted Excel file
+    XLSX.writeFile(workbook, excelName);
+    
+    // Convert workbook to File buffer for downstream Excel matching pipeline
+    const wbArray = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    return new File([wbArray], excelName, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/**
  * Exports data table to Excel (.xlsx) file using SheetJS.
  * @param {Array<Object>} records - Display records to export
  * @param {string} fileName - Output file name

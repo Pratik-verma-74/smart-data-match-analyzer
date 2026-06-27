@@ -339,9 +339,14 @@ async function startAnalysisPipeline() {
             if (['xlsx', 'xls', 'csv'].includes(ext)) {
                 records = await parseExcelOrCSV(file);
             } else if (ext === 'pdf') {
-                records = await parsePDF(file, (msg) => {
+                const pdfParsedRecords = await parsePDF(file, (msg) => {
                     updateProgressModal(Math.round(((i) / totalFiles) * 40) + 5, msg);
                 });
+                updateProgressModal(Math.round(((i) / totalFiles) * 40) + 8, `Converting PDF "${file.name}" into structured Excel sheet...`);
+                await sleep(200);
+                const convertedExcelFile = await convertPDFToExcelFile(pdfParsedRecords, file.name);
+                updateProgressModal(Math.round(((i) / totalFiles) * 40) + 10, `Reading records from converted Excel file...`);
+                records = await parseExcelOrCSV(convertedExcelFile);
             }
 
             AppState.extractedRecords.push(...records);
