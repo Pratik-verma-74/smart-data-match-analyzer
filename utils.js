@@ -146,61 +146,46 @@ function calculateSimilarity(str1, str2) {
  */
 function autoMapColumns(headers) {
     const mapping = {
+        formNumber: null,
         name: null,
         fatherName: null,
+        programme: null,
+        score: null,
         address: null,
         mobile: null,
         dob: null
     };
     
     const patterns = {
-        fatherName: [/father/i, /guardian/i, /pitaji/i, /f_name/i, /parent/i],
-        name: [/candidate.*name/i, /full.*name/i, /student.*name/i, /person.*name/i, /applicant.*name/i, /^name$/i, /emp.*name/i, /member.*name/i],
+        formNumber: [/form.*num/i, /app.*num/i, /reg.*num/i, /roll.*num/i, /^id$/i, /application.*no/i],
+        fatherName: [/name.*of.*father/i, /father.*name/i, /father/i, /guardian/i, /pitaji/i, /f_name/i, /parent/i],
+        name: [/name.*of.*the.*applicant/i, /name.*of.*applicant/i, /candidate.*name/i, /full.*name/i, /student.*name/i, /person.*name/i, /applicant.*name/i, /^name$/i, /emp.*name/i, /member.*name/i],
+        programme: [/programme/i, /course/i, /branch/i, /dept/i, /department/i],
+        score: [/score/i, /mark/i, /rank/i, /merit/i, /percent/i, /cgpa/i],
         mobile: [/mobile/i, /phone/i, /contact/i, /cell/i, /whatsapp/i, /tel/i],
         dob: [/dob/i, /birth/i, /age/i, /date.*of.*birth/i],
         address: [/address/i, /city/i, /location/i, /residence/i, /pincode/i, /district/i, /state/i]
     };
     
-    // Assign headers by priority (fatherName before name to avoid confusing "Father Name" with "Name")
     const assignedHeaders = new Set();
     
-    // Step 1: Match Father Name
-    for (const header of headers) {
-        if (patterns.fatherName.some(p => p.test(header))) {
-            mapping.fatherName = header;
-            assignedHeaders.add(header);
-            break;
-        }
-    }
-    
-    // Step 2: Match Name
-    for (const header of headers) {
-        if (assignedHeaders.has(header)) continue;
-        if (patterns.name.some(p => p.test(header))) {
-            mapping.name = header;
-            assignedHeaders.add(header);
-            break;
-        }
-    }
-    
-    // Fallback if generic "Name" wasn't caught
-    if (!mapping.name) {
+    for (const field of ['formNumber', 'fatherName', 'name', 'programme', 'score', 'mobile', 'dob', 'address']) {
         for (const header of headers) {
             if (assignedHeaders.has(header)) continue;
-            if (/name/i.test(header)) {
-                mapping.name = header;
+            if (patterns[field].some(p => p.test(header))) {
+                mapping[field] = header;
                 assignedHeaders.add(header);
                 break;
             }
         }
     }
     
-    // Step 3: Match Optional columns
-    for (const field of ['mobile', 'dob', 'address']) {
+    // Fallback for name if generic "Name" wasn't caught
+    if (!mapping.name) {
         for (const header of headers) {
             if (assignedHeaders.has(header)) continue;
-            if (patterns[field].some(p => p.test(header))) {
-                mapping[field] = header;
+            if (/name/i.test(header)) {
+                mapping.name = header;
                 assignedHeaders.add(header);
                 break;
             }
@@ -251,6 +236,9 @@ async function parseExcelOrCSV(file) {
                         id: `${file.name}_row_${index + 1}`,
                         sourceFile: file.name,
                         fileType: file.name.split('.').pop().toUpperCase(),
+                        formNumber: String(row[colMap.formNumber] || '').trim(),
+                        programme: String(row[colMap.programme] || '').trim(),
+                        scoreValue: String(row[colMap.score] || '').trim(),
                         rawName: rawName || 'N/A',
                         rawFatherName: rawFather || 'N/A',
                         normName: normalizeText(rawName),
@@ -422,9 +410,24 @@ function parseTextLinesToRecords(lines, fileName) {
     
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
+        let formNumber = '';
+        let programme = '';
+        let scoreValue = '';
         let name = '';
         let fatherName = '';
         let mobile = '';
+        
+        // Check if line contains a Form Number / App ID like IGNTUPG0000455 or alphanumeric code
+        const formMatch = line.match(/\b([A-Z]{2,10}\d{4,15})\b/i);
+        if (formMatch) {
+            formNumber = formMatch[1].toUpperCase();
+        }
+        
+        // Check for score at the end of line
+        const scoreMatch = line.match(/\b(\d{1,3}(?:\.\d{1,2})?)$/);
+        if (scoreMatch && !/^\d{10}$/.test(scoreMatch[1])) {
+            scoreValue = scoreMatch[1];
+        }
         
         // Check for key-value labels in the same line or sequential lines
         const nameMatch = line.match(/(?:Name|Candidate|Applicant|Student)\s*[\:\-\=]\s*([A-Za-z\s]+?)(?=\s+(?:Father|S\/O|D\/O|DOB|Mobile)|$)/i);
@@ -435,25 +438,33 @@ function parseTextLinesToRecords(lines, fileName) {
             name = nameMatch[1].trim();
             fatherName = fatherMatch[1].trim();
             if (mobileMatch) mobile = mobileMatch[1];
-        } else if (nameMatch) {
-            name = nameMatch[1].trim();
-            if (i + 1 < lines.length) {
-                const nextLine = lines[i + 1];
-                const nextFather = nextLine.match(/(?:Father|Guardian|S\/O|D\/O)\s*[\:\-\=]?\s*([A-Za-z\s]+)/i);
-                if (nextFather) {
-                    fatherName = nextFather[1].trim();
-                    i++;
-                }
-            }
         } else if (line.includes(' | ') || line.includes(' - ') || line.includes('/') || line.includes(',') || line.includes('\t') || /\s{2,}/.test(line)) {
             const parts = line.split(/[\|\t\/\,\-]|\s{2,}/).map(s => s.trim()).filter(Boolean);
-            const textParts = parts.filter(p => !/^\d+$/.test(p) && p.length > 1 && !/^(male|female|gen|obc|sc|st|m|f|yes|no)$/i.test(p));
-            if (textParts.length >= 2) {
-                name = textParts[0];
-                fatherName = textParts[1];
-                const mobPart = parts.find(p => /\b[6-9]\d{9}\b/.test(p));
-                if (mobPart) mobile = mobPart.match(/\b[6-9]\d{9}\b/)[0];
+            
+            // If Form Number was found in parts
+            const formIdx = parts.findIndex(p => p.toUpperCase() === formNumber || /^[A-Z]{2,10}\d{4,15}$/i.test(p));
+            if (formIdx !== -1) {
+                formNumber = parts[formIdx].toUpperCase();
+                const afterParts = parts.slice(formIdx + 1).filter(p => !/^\d+$/.test(p) && p.length > 1);
+                if (afterParts.length >= 3 && /(master|bachelor|m\.?a|b\.?a|m\.?sc|b\.?sc|m\.?com|b\.?com|m\.?tech|b\.?tech|pg|ug|diploma|app|comp|sci|eng)/i.test(afterParts[0])) {
+                    programme = afterParts[0];
+                    name = afterParts[1];
+                    fatherName = afterParts[2];
+                } else if (afterParts.length >= 2) {
+                    name = afterParts[0];
+                    fatherName = afterParts[1];
+                    if (afterParts[2]) programme = afterParts[2];
+                }
+            } else {
+                const textParts = parts.filter(p => !/^\d+$/.test(p) && p.length > 1 && !/^(male|female|gen|obc|sc|st|m|f|yes|no)$/i.test(p));
+                if (textParts.length >= 2) {
+                    name = textParts[0];
+                    fatherName = textParts[1];
+                }
             }
+            
+            const mobPart = parts.find(p => /\b[6-9]\d{9}\b/.test(p));
+            if (mobPart) mobile = mobPart.match(/\b[6-9]\d{9}\b/)[0];
         }
         
         if (name && fatherName && name.length > 1 && fatherName.length > 1) {
@@ -461,6 +472,9 @@ function parseTextLinesToRecords(lines, fileName) {
                 id: `${fileName}_pdf_${recordIndex++}`,
                 sourceFile: fileName,
                 fileType: 'PDF',
+                formNumber: formNumber,
+                programme: programme,
+                scoreValue: scoreValue,
                 rawName: name,
                 rawFatherName: fatherName,
                 normName: normalizeText(name),
@@ -468,7 +482,7 @@ function parseTextLinesToRecords(lines, fileName) {
                 address: '',
                 mobile: normalizeMobile(mobile),
                 dob: '',
-                originalRowData: { Name: name, 'Father Name': fatherName, Mobile: mobile }
+                originalRowData: { 'FORM NUMBER': formNumber, 'PROGRAMME NAME': programme, 'NAME OF THE APPLICANT': name, 'NAME OF FATHER': fatherName, 'SCORE': scoreValue }
             });
         }
     }
@@ -491,9 +505,12 @@ function parseTextLinesToRecords(lines, fileName) {
 async function convertPDFToExcelFile(pdfRecords, pdfFileName) {
     const sheetData = pdfRecords.map((r, idx) => ({
         'S.No': idx + 1,
-        'Candidate Name': r.rawName || 'N/A',
-        'Father / Guardian Name': r.rawFatherName || 'N/A',
-        'Mobile': r.mobile || '',
+        'FORM NUMBER': r.formNumber || 'N/A',
+        'PROGRAMME NAME': r.programme || 'N/A',
+        'NAME OF THE APPLICANT': r.rawName || 'N/A',
+        'NAME OF FATHER': r.rawFatherName || 'N/A',
+        'SCORE': r.scoreValue || '',
+        'MOBILE': r.mobile || '',
         'Source Document': pdfFileName
     }));
     
@@ -502,8 +519,11 @@ async function convertPDFToExcelFile(pdfRecords, pdfFileName) {
     // Auto-adjust column widths
     worksheet['!cols'] = [
         { wch: 8 },
+        { wch: 20 },
+        { wch: 35 },
         { wch: 30 },
         { wch: 30 },
+        { wch: 12 },
         { wch: 15 },
         { wch: 25 }
     ];

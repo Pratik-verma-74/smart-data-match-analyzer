@@ -394,36 +394,32 @@ function executeMatchingEngine(allRecords) {
     const processedIds = new Set();
 
     // Step A: Detect within-file DUPLICATES first
-    // Same record repeated in same file
     for (let i = 0; i < allRecords.length; i++) {
         const recA = allRecords[i];
         if (processedIds.has(recA.id)) continue;
 
-        let isDuplicate = false;
         for (let j = i + 1; j < allRecords.length; j++) {
             const recB = allRecords[j];
             if (processedIds.has(recB.id)) continue;
 
-            // Check if from same file
             if (recA.sourceFile === recB.sourceFile) {
                 const nameSim = calculateSimilarity(recA.normName, recB.normName);
                 const fatherSim = calculateSimilarity(recA.normFatherName, recB.normFatherName);
+                const isFormNoSame = recA.formNumber && recB.formNumber && recA.formNumber.toUpperCase() === recB.formNumber.toUpperCase() && recA.formNumber !== 'N/A';
 
-                if (nameSim >= 95 && fatherSim >= 95) {
-                    // Mark recB as duplicate
+                if (isFormNoSame || (nameSim >= 95 && fatherSim >= 95)) {
                     duplicates.push({
                         ...recB,
                         status: 'DUPLICATE',
-                        score: Math.round((nameSim + fatherSim) / 2)
+                        score: isFormNoSame ? 100 : Math.round((nameSim + fatherSim) / 2)
                     });
                     processedIds.add(recB.id);
-                    isDuplicate = true;
                 }
             }
         }
     }
 
-    // Step B: Compare remaining records across files (or within remaining pool)
+    // Step B: Compare remaining records across files
     const remainingRecords = allRecords.filter(r => !processedIds.has(r.id));
     const matchedInStepB = new Set();
 
@@ -433,7 +429,7 @@ function executeMatchingEngine(allRecords) {
 
         let bestMatch = null;
         let bestScore = 0;
-        let bestType = null; // 'EXACT' or 'PARTIAL'
+        let bestType = null;
 
         for (let j = i + 1; j < remainingRecords.length; j++) {
             const recB = remainingRecords[j];
@@ -442,23 +438,25 @@ function executeMatchingEngine(allRecords) {
             const nameSim = calculateSimilarity(recA.normName, recB.normName);
             const fatherSim = calculateSimilarity(recA.normFatherName, recB.normFatherName);
             const overallScore = Math.round((nameSim + fatherSim) / 2);
+            const isFormNoSame = recA.formNumber && recB.formNumber && recA.formNumber.toUpperCase() === recB.formNumber.toUpperCase() && recA.formNumber !== 'N/A';
 
-            // Rule 1: Exact Match (Name AND Father Name both same / score 95-100)
-            if (nameSim >= 95 && fatherSim >= 95) {
-                if (overallScore > bestScore) {
-                    bestScore = overallScore;
+            // Rule 1: Exact Match (Form Number same OR (Applicant Name same & Father Name same))
+            if (isFormNoSame || (nameSim >= 95 && fatherSim >= 95)) {
+                const curScore = isFormNoSame ? 100 : overallScore;
+                if (curScore > bestScore) {
+                    bestScore = curScore;
                     bestMatch = recB;
                     bestType = 'EXACT';
                 }
             }
-            // Rule 2: Partial Match (Name same but Father Name slightly diff OR vice versa / score 80-94)
+            // Rule 2: Partial Match (Applicant Name same or very similar)
             else if (
-                (nameSim >= 95 && fatherSim >= 75) ||
-                (nameSim >= 75 && fatherSim >= 95) ||
+                nameSim >= 90 ||
+                (nameSim >= 80 && fatherSim >= 80) ||
                 (overallScore >= 80 && overallScore < 95)
             ) {
                 if (overallScore > bestScore && bestType !== 'EXACT') {
-                    bestScore = overallScore;
+                    bestScore = Math.max(overallScore, 85);
                     bestMatch = recB;
                     bestType = 'PARTIAL';
                 }
@@ -473,6 +471,9 @@ function executeMatchingEngine(allRecords) {
 
             const combinedRecord = {
                 id: `${recA.id}_${bestMatch.id}`,
+                formNumber: recA.formNumber || bestMatch.formNumber || '',
+                programme: recA.programme || bestMatch.programme || '',
+                scoreValue: recA.scoreValue || bestMatch.scoreValue || '',
                 name: recA.rawName.length >= bestMatch.rawName.length ? recA.rawName : bestMatch.rawName,
                 fatherName: recA.rawFatherName.length >= bestMatch.rawFatherName.length ? recA.rawFatherName : bestMatch.rawFatherName,
                 rawName: `${recA.rawName} ≈ ${bestMatch.rawName}`,
@@ -482,8 +483,8 @@ function executeMatchingEngine(allRecords) {
                 score: bestScore,
                 sourceFiles: sourceFilesList,
                 sourceFile: sourceFilesList.join(', '),
-                mobile: recA.mobile || bestMatch.mobile || 'N/A',
-                address: recA.address || bestMatch.address || 'N/A'
+                mobile: recA.mobile || bestMatch.mobile || '',
+                address: recA.address || bestMatch.address || ''
             };
 
             if (bestType === 'EXACT') {
@@ -494,7 +495,6 @@ function executeMatchingEngine(allRecords) {
                 partialMatches.push(combinedRecord);
             }
         } else {
-            // Rule 4: Unique Record
             matchedInStepB.add(recA.id);
             uniqueRecords.push({
                 ...recA,
@@ -592,8 +592,8 @@ function renderActiveTable() {
     if (['exact', 'partial'].includes(AppState.activeTab)) {
         tableHeader.innerHTML = `
             <tr>
-                <th>Person Name</th>
-                <th>Father / Guardian Name</th>
+                <th>Applicant Name & Form No</th>
+                <th>Father Name & Programme</th>
                 <th class="text-center">Match Score</th>
                 <th>Source Files</th>
                 <th class="text-center">Status</th>
@@ -603,10 +603,10 @@ function renderActiveTable() {
         // Duplicates and Unique table
         tableHeader.innerHTML = `
             <tr>
-                <th>Person Name</th>
-                <th>Father / Guardian Name</th>
+                <th>Applicant Name & Form No</th>
+                <th>Father Name & Programme</th>
                 <th>Source File</th>
-                <th>Mobile / Contact</th>
+                <th>Score / Contact</th>
                 <th class="text-center">Status</th>
             </tr>
         `;
@@ -634,6 +634,10 @@ function renderActiveTable() {
             ? item.sourceFiles.map(f => `<span class="file-tag"><i class="fas fa-file"></i> ${f}</span>`).join(' ')
             : `<span class="file-tag"><i class="fas fa-file"></i> ${item.sourceFile || 'N/A'}</span>`;
 
+        const formBadge = item.formNumber && item.formNumber !== 'N/A' ? `<div style="margin-top: 4px;"><span style="background: rgba(37, 99, 235, 0.1); color: var(--primary-blue); padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;"><i class="fas fa-id-card"></i> Form No: ${item.formNumber}</span></div>` : '';
+        const progBadge = item.programme && item.programme !== 'N/A' ? `<div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;"><i class="fas fa-graduation-cap"></i> ${item.programme}</div>` : '';
+        const scoreBadge = item.scoreValue && item.scoreValue !== 'N/A' ? `<div style="font-size: 12px; font-weight: 600; color: #059669;">Marks: ${item.scoreValue}</div>` : (item.mobile || 'N/A');
+
         let statusBadgeClass = 'badge-unique';
         if (item.status === 'EXACT MATCH') statusBadgeClass = 'badge-exact';
         else if (item.status === 'PARTIAL MATCH') statusBadgeClass = 'badge-partial';
@@ -647,8 +651,8 @@ function renderActiveTable() {
 
             return `
                 <tr class="table-row-hover">
-                    <td class="font-medium text-main">${nameStr}</td>
-                    <td class="text-secondary">${fatherStr}</td>
+                    <td><div class="font-medium text-main">${nameStr}</div>${formBadge}</td>
+                    <td><div class="text-secondary">${fatherStr}</div>${progBadge}</td>
                     <td class="text-center">
                         <div class="score-pill" style="border-color: ${scoreColor}; color: ${scoreColor}">
                             <i class="fas fa-chart-line"></i> ${scoreVal}%
@@ -661,10 +665,10 @@ function renderActiveTable() {
         } else {
             return `
                 <tr class="table-row-hover">
-                    <td class="font-medium text-main">${nameStr}</td>
-                    <td class="text-secondary">${fatherStr}</td>
+                    <td><div class="font-medium text-main">${nameStr}</div>${formBadge}</td>
+                    <td><div class="text-secondary">${fatherStr}</div>${progBadge}</td>
                     <td><div class="files-list">${filesStr}</div></td>
-                    <td class="text-secondary">${item.mobile || 'N/A'}</td>
+                    <td class="text-secondary">${scoreBadge}</td>
                     <td class="text-center"><span class="status-badge ${statusBadgeClass}">${item.status}</span></td>
                 </tr>
             `;
